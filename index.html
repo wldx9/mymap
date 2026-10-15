@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>전국 증명사진관 & 여권민원실 찾기</title>
+    <!-- 카카오맵 API (services 라이브러리 포함) -->
+    <script type="text/javascript" src="//dapi.kakao.com/v2/maps/sdk.js?appkey=e8e9622fa2f314ccf70d3565b281d85e&libraries=services"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            font-family: 'Noto Sans KR', sans-serif;
+        }
+        #container {
+            display: flex;
+            width: 100%;
+            height: 100vh;
+        }
+        /* 왼쪽 사이드바 (탭 & 리스트) */
+        #sidebar {
+            width: 320px;
+            height: 100%;
+            border-right: 1px solid #ccc;
+            display: flex;
+            flex-direction: column;
+            background-color: #f9f9f9;
+        }
+        /* 탭 버튼 영역 */
+        .tab-group {
+            display: flex;
+            border-bottom: 1px solid #ccc;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 15px 0;
+            border: none;
+            background-color: #eee;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        .tab-btn.active {
+            background-color: #fff;
+            color: #333;
+            border-bottom: 3px solid #ffeb00; /* 카카오 노란색 포인트 */
+        }
+        /* 장소 목록 리스트 */
+        #place-list {
+            flex: 1;
+            overflow-y: auto;
+            list-style: none;
+        }
+        #place-list li {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            background-color: #fff;
+        }
+        #place-list li:hover {
+            background-color: #f0f8ff;
+        }
+        #place-list .place-title {
+            font-weight: bold;
+            font-size: 15px;
+            margin-bottom: 5px;
+        }
+        #place-list .place-address {
+            font-size: 12px;
+            color: #666;
+        }
+        #place-list .place-phone {
+            font-size: 12px;
+            color: #888;
+            margin-top: 3px;
+        }
+        /* 지도 및 로드뷰 영역 */
+        #main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        #map {
+            width: 100%;
+            height: 60%;
+        }
+        #roadview-container {
+            width: 100%;
+            height: 40%;
+            position: relative;
+            border-top: 2px solid #ccc;
+        }
+        #roadview {
+            width: 100%;
+            height: 100%;
+        }
+        /* 로드뷰 없음 안내 메시지 오버레이 */
+        #roadview-no-data {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(245, 245, 245, 0.9);
+            color: #555;
+            font-size: 18px;
+            font-weight: bold;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+        /* 커스텀 오버레이/마커 스타일 */
+        .emoji-marker {
+            font-size: 28px;
+            background: #ffffff;
+            border: 2px solid #333;
+            border-radius: 50%;
+            width: 42px;
+            height: 42px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            cursor: pointer;
+        }
+        /* 인포윈도우 스타일 */
+        .info-popup {
+            padding: 10px;
+            font-size: 12px;
+            line-height: 1.5;
+            max-width: 200px;
+        }
+        .info-popup strong {
+            font-size: 14px;
+            display: block;
+            margin-bottom: 3px;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <!-- 왼쪽 사이드바 -->
+    <div id="sidebar">
+        <div class="tab-group">
+            <button class="tab-btn active" onclick="switchTab('photo')">📸 증명사진관</button>
+            <button class="tab-btn" onclick="switchTab('passport')">🧑‍💼 여권민원실</button>
+        </div>
+        <ul id="place-list"></ul>
+    </div>
+
+    <!-- 메인 지도 및 로드뷰 영역 -->
+    <div id="main-content">
+        <div id="map"></div>
+        <div id="roadview-container">
+            <div id="roadview"></div>
+            <div id="roadview-no-data">거리뷰 없음</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // 글로벌 변수 선언
+    let map;
+    let roadview;
+    let roadviewClient;
+    let ps; // 장소 검색 객체
+    let currentInfowindow = null; // 현재 열린 인포윈도우
+    
+    let activeCategory = 'photo'; // 현재 활성화된 탭 ('photo' | 'passport')
+    let currentOverlayList = [];  // 지도에 생성된 CustomOverlay(이모티콘 마커) 목록
+
+    // 탭별 검색 키워드 및 이모티콘 설정
+    const TAB_CONFIG = {
+        photo: {
+            keyword: '증명사진',
+            emoji: '📸'
+        },
+        passport: {
+            keyword: '여권민원실',
+            emoji: '🧑‍💼'
+        }
+    };
+
+    // 페이지 로드 시 초기화
+    window.onload = function() {
+        initMap();
+    };
+
+    // 지도 및 로드뷰 초기화 함수
+    function initMap() {
+        const mapContainer = document.getElementById('map');
+        const defaultPosition = new kakao.maps.LatLng(37.566826, 126.9786567); // 기본 위치: 서울시청
+
+        const mapOptions = {
+            center: defaultPosition,
+            level: 4
+        };
+
+        map = new kakao.maps.Map(mapContainer, mapOptions);
+
+        // 로드뷰 및 로드뷰 클라이언트 생성
+        const roadviewContainer = document.getElementById('roadview');
+        roadview = new kakao.maps.Roadview(roadviewContainer);
+        roadviewClient = new kakao.maps.RoadviewClient();
+
+        // 장소 검색 서비스 객체 생성
+        ps = new kakao.maps.services.Places();
+
+        // 사용자 현재 위치 파악 후 지도 이동 및 첫 검색 실행
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+                    const currentPos = new kakao.maps.LatLng(lat, lng);
+
+                    map.setCenter(currentPos);
+                    searchCurrentCategory(); // 현재 위치 기반 검색
+                },
+                function(error) {
+                    // 위치 정보 권한 거부 시 기본 위치에서 검색
+                    searchCurrentCategory();
+                }
+            );
+        } else {
+            searchCurrentCategory();
+        }
+    }
+
+    // 탭 전환 처리 함수
+    function switchTab(category) {
+        if (activeCategory === category) return; // 같은 탭 클릭 시 무시
+
+        activeCategory = category;
+
+        // 탭 버튼 스타일 업데이트
+        const buttons = document.querySelectorAll('.tab-btn');
+        buttons[0].classList.toggle('active', category === 'photo');
+        buttons[1].classList.toggle('active', category === 'passport');
+
+        // 기존 마커 및 데이터 삭제 후 새 카테고리 검색
+        clearPreviousResults();
+        searchCurrentCategory();
+    }
+
+    // 기존 데이터 및 마커 지우기
+    function clearPreviousResults() {
+        // 지도 위 커스텀 오버레이(이모티콘 마커) 모두 제거
+        currentOverlayList.forEach(overlay => overlay.setMap(null));
+        currentOverlayList = [];
+
+        // 인포윈도우 닫기
+        if (currentInfowindow) {
+            currentInfowindow.close();
+        }
+
+        // 왼쪽 리스트 초기화
+        const listElement = document.getElementById('place-list');
+        listElement.innerHTML = '';
+    }
+
+    // 현재 선택된 탭 정보 기반으로 키워드 검색
+    function searchCurrentCategory() {
+        const config = TAB_CONFIG[activeCategory];
+        const currentCenter = map.getCenter();
+
+        // 키워드 및 현재 위치 중심 반경 검색 설정
+        const searchOptions = {
+            location: currentCenter,
+            radius: 5000, // 반경 5km 내 검색
+            sort: kakao.maps.services.SortBy.ACCURACY
+        };
+
+        ps.keywordSearch(config.keyword, placesSearchCB, searchOptions);
+    }
+
+    // 장소 검색 완료 시 호출되는 콜백 함수
+    function placesSearchCB(data, status, pagination) {
+        if (status === kakao.maps.services.Status.OK) {
+            displayPlaces(data);
+        } else if (status === kakao.maps.services.Status.ZERO_RESULT) {
+            alert('주변에 검색 결과가 없습니다.');
+        } else if (status === kakao.maps.services.Status.ERROR) {
+            alert('검색 중 오류가 발생했습니다.');
+        }
+    }
+
+    // 검색된 장소 목록을 지도 마커 및 왼쪽 리스트로 표시
+    function displayPlaces(places) {
+        const listElement = document.getElementById('place-list');
+        const bounds = new kakao.maps.LatLngBounds();
+        const currentEmoji = TAB_CONFIG[activeCategory].emoji;
+
+        places.forEach((place, index) => {
+            const placePosition = new kakao.maps.LatLng(place.y, place.x);
+            bounds.extend(placePosition);
+
+            // 1. 커스텀 마커(이모티콘) 생성
+            const markerElement = document.createElement('div');
+            markerElement.className = 'emoji-marker';
+            markerElement.innerHTML = currentEmoji;
+
+            const customOverlay = new kakao.maps.CustomOverlay({
+                position: placePosition,
+                content: markerElement,
+                yAnchor: 1
+            });
+
+            customOverlay.setMap(map);
+            currentOverlayList.push(customOverlay);
+
+            // 2. 인포윈도우 생성 (팝업)
+            const phoneText = place.phone ? place.phone : '전화번호 없음';
+            const addressText = place.road_address_name ? place.road_address_name : place.address_name;
+
+            const popupContent = `
+                <div class="info-popup">
+                    <strong>${place.place_name}</strong>
+                    <div>${addressText}</div>
+                    <div style="color: #666; margin-top:2px;">📞 ${phoneText}</div>
+                </div>
+            `;
+
+            const infowindow = new kakao.maps.InfoWindow({
+                content: popupContent,
+                removable: true
+            });
+
+            // 마커 클릭 이벤트 설정
+            markerElement.addEventListener('click', function() {
+                selectPlace(placePosition, infowindow, customOverlay, place);
+            });
+
+            // 3. 왼쪽 사이드바 리스트 아이템 생성
+            const listItem = document.createElement('li');
+            listItem.innerHTML = `
+                <div class="place-title">${currentEmoji} ${place.place_name}</div>
+                <div class="place-address">${addressText}</div>
+                <div class="place-phone">${phoneText}</div>
+            `;
+
+            // 리스트 항목 클릭 시 해당 장소 선택
+            listItem.addEventListener('click', function() {
+                map.panTo(placePosition);
+                selectPlace(placePosition, infowindow, customOverlay, place);
+            });
+
+            listElement.appendChild(listItem);
+        });
+
+        // 모든 검색 결과 마커가 지도 안에 보이도록 영역 조정
+        map.setBounds(bounds);
+    }
+
+    // 장소 선택 시 공통 처리 (인포윈도우 및 로드뷰 동기화)
+    function selectPlace(position, infowindow, overlay, placeData) {
+        // 이전 인포윈도우 닫기
+        if (currentInfowindow) {
+            currentInfowindow.close();
+        }
+
+        // 인포윈도우 열기 (오버레이 위에 띄우기 위해 마커 위치 지정)
+        infowindow.open(map, overlay);
+        currentInfowindow = infowindow;
+
+        // 로드뷰 업데이트
+        updateRoadview(position);
+    }
+
+    // 좌표 기반 로드뷰 파노라마 업데이트 함수
+    function updateRoadview(position) {
+        const noDataOverlay = document.getElementById('roadview-no-data');
+
+        // 해당 좌표 근처 50m 내 로드뷰 PanoID 검색
+        roadviewClient.getNearestPanoId(position, 50, function(panoId) {
+            if (panoId === null) {
+                // 근처에 로드뷰 데이터가 없는 경우
+                noDataOverlay.style.display = 'flex';
+            } else {
+                // 로드뷰 데이터가 존재하는 경우
+                noDataOverlay.style.display = 'none';
+                roadview.setPanoId(panoId, position); // 로드뷰 실행
+            }
+        });
+    }
+</script>
+
+</body>
+</html>
