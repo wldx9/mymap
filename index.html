@@ -215,7 +215,12 @@
         // 장소 검색 서비스 객체 생성
         ps = new kakao.maps.services.Places();
 
-        // 사용자 현재 위치 파악 후 지도 이동 및 첫 검색 실행
+        // 지도 이동이나 확대/축소가 끝났을 때(idle 이벤트) 현재 지도 영역 기준으로 자동으로 다시 검색
+        kakao.maps.event.addListener(map, 'idle', function() {
+            searchCurrentCategory();
+        });
+
+        // 사용자 현재 위치 파악 후 지도 이동
         if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
                 function(position) {
@@ -268,16 +273,16 @@
         listElement.innerHTML = '';
     }
 
-    // 현재 선택된 탭 정보 기반으로 키워드 검색
+    // 현재 선택된 탭 정보 기반으로 현재 지도 화면 범위(Bounds) 검색
     function searchCurrentCategory() {
-        const config = TAB_CONFIG[activeCategory];
-        const currentCenter = map.getCenter();
+        clearPreviousResults();
 
-        // 키워드 및 현재 위치 중심 반경 검색 설정
+        const config = TAB_CONFIG[activeCategory];
+
+        // 현재 지도 영역(Bounds) 범위 내에서만 검색 설정 (전국 어디로 이동하든 영역 자동 반영)
         const searchOptions = {
-            location: currentCenter,
-            radius: 5000, // 반경 5km 내 검색
-            sort: kakao.maps.services.SortBy.ACCURACY
+            bounds: map.getBounds(),
+            useMapBounds: true
         };
 
         ps.keywordSearch(config.keyword, placesSearchCB, searchOptions);
@@ -288,21 +293,18 @@
         if (status === kakao.maps.services.Status.OK) {
             displayPlaces(data);
         } else if (status === kakao.maps.services.Status.ZERO_RESULT) {
-            alert('주변에 검색 결과가 없습니다.');
-        } else if (status === kakao.maps.services.Status.ERROR) {
-            alert('검색 중 오류가 발생했습니다.');
+            // 현재 이동한 화면 영역 내에 결과가 없는 경우
+            document.getElementById('place-list').innerHTML = '<li style="text-align:center; padding:20px; color:#888;">이 영역에 검색 결과가 없습니다.</li>';
         }
     }
 
     // 검색된 장소 목록을 지도 마커 및 왼쪽 리스트로 표시
     function displayPlaces(places) {
         const listElement = document.getElementById('place-list');
-        const bounds = new kakao.maps.LatLngBounds();
         const currentEmoji = TAB_CONFIG[activeCategory].emoji;
 
         places.forEach((place, index) => {
             const placePosition = new kakao.maps.LatLng(place.y, place.x);
-            bounds.extend(placePosition);
 
             // 1. 커스텀 마커(이모티콘) 생성
             const markerElement = document.createElement('div');
@@ -356,9 +358,6 @@
 
             listElement.appendChild(listItem);
         });
-
-        // 모든 검색 결과 마커가 지도 안에 보이도록 영역 조정
-        map.setBounds(bounds);
     }
 
     // 장소 선택 시 공통 처리 (인포윈도우 및 로드뷰 동기화)
@@ -368,7 +367,7 @@
             currentInfowindow.close();
         }
 
-        // 인포윈도우 열기 (오버레이 위에 띄우기 위해 마커 위치 지정)
+        // 인포윈도우 열기
         infowindow.open(map, overlay);
         currentInfowindow = infowindow;
 
