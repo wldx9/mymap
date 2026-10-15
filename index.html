@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>전국 증명사진관 & 여권민원실 찾기</title>
+    <!-- 카카오맵 API (services 라이브러리 포함) -->
+    <script type="text/javascript" src="//dapi.kakao.com/v2/maps/sdk.js?appkey=e8e9622fa2f314ccf70d3565b281d85e&libraries=services"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Noto Sans KR', -apple-system, sans-serif;
+        }
+        #container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+        }
+        /* 왼쪽 사이드바 */
+        #sidebar {
+            width: 340px;
+            height: 100%;
+            border-right: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+            background-color: #f8f9fa;
+            flex-shrink: 0;
+            z-index: 10;
+        }
+        .tab-group {
+            display: flex;
+            background-color: #eee;
+            border-bottom: 1px solid #ccc;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 14px 0;
+            border: none;
+            background-color: transparent;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            color: #666;
+            transition: all 0.2s;
+        }
+        .tab-btn.active {
+            background-color: #fff;
+            color: #000;
+            border-bottom: 3px solid #ffeb00;
+        }
+        #place-list {
+            flex: 1;
+            overflow-y: auto;
+            list-style: none;
+        }
+        #place-list li {
+            padding: 14px 16px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            background-color: #fff;
+        }
+        #place-list li:hover {
+            background-color: #f0f7ff;
+        }
+        #place-list .place-title {
+            font-weight: bold;
+            font-size: 14px;
+            color: #222;
+            margin-bottom: 4px;
+        }
+        #place-list .place-address {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.3;
+        }
+        #place-list .place-phone {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+        
+        /* 오른쪽 영역 (지도 & 로드뷰) */
+        #main-content {
+            flex: 1;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+        #map-wrapper {
+            width: 100%;
+            height: 60%;
+            position: relative;
+        }
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+        #roadview-wrapper {
+            width: 100%;
+            height: 40%;
+            position: relative;
+            border-top: 2px solid #ccc;
+            background-color: #e9ecef;
+        }
+        #roadview {
+            width: 100%;
+            height: 100%;
+        }
+        #roadview-no-data {
+            display: flex;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(248, 249, 250, 0.95);
+            color: #495057;
+            font-size: 15px;
+            font-weight: bold;
+            justify-content: center;
+            align-items: center;
+            z-index: 5;
+        }
+
+        /* 이모티콘 마커 스타일 */
+        .emoji-marker {
+            font-size: 18px;
+            background: #ffffff;
+            border: 2px solid #333;
+            border-radius: 50%;
+            width: 34px;
+            height: 34px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+            cursor: pointer;
+            transition: transform 0.15s ease-in-out;
+        }
+        .emoji-marker:hover {
+            transform: scale(1.25);
+            z-index: 99;
+        }
+        .info-popup {
+            padding: 10px;
+            font-size: 12px;
+            line-height: 1.4;
+            max-width: 220px;
+        }
+        .info-popup strong {
+            font-size: 14px;
+            display: block;
+            margin-bottom: 4px;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <div id="sidebar">
+        <div class="tab-group">
+            <button class="tab-btn active" id="btn-photo" onclick="switchTab('photo')">📸 증명사진관</button>
+            <button class="tab-btn" id="btn-passport" onclick="switchTab('passport')">🧑‍💼 여권민원실</button>
+        </div>
+        <ul id="place-list"></ul>
+    </div>
+
+    <div id="main-content">
+        <div id="map-wrapper">
+            <div id="map"></div>
+        </div>
+        <div id="roadview-wrapper">
+            <div id="roadview"></div>
+            <div id="roadview-no-data">마커를 클릭하면 해당 장소의 거리뷰가 나옵니다</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let map;
+    let roadview;
+    let roadviewClient;
+    let ps;
+    let currentInfowindow = null;
+    
+    let activeCategory = 'photo';
+    let currentOverlayList = [];
+    let accumulatedPlaces = []; // 수집된 전체 장소 리스트
+
+    const TAB_CONFIG = {
+        photo: { keyword: '증명사진', emoji: '📸' },
+        passport: { keyword: '여권민원실', emoji: '🧑‍💼' }
+    };
+
+    // 전국 균일 검색을 위한 주요 광역 지역 거점 리스트
+    const REGION_CENTERS = [
+        "서울", "경기 수원", "경기 고양", "인천", "강원 춘천", 
+        "대전", "충북 청주", "충남 천안", "전북 전주", "광주", 
+        "전남 목포", "대구", "경북 포항", "부산", "울산", "경남 창원", "제주"
+    ];
+
+    window.onload = function() {
+        initMap();
+    };
+
+    function initMap() {
+        const mapContainer = document.getElementById('map');
+        const defaultPosition = new kakao.maps.LatLng(36.5, 127.5); // 대한민국 중심 좌표
+
+        const mapOptions = {
+            center: defaultPosition,
+            level: 12 // 전국이 들어오는 지도 레벨
+        };
+
+        map = new kakao.maps.Map(mapContainer, mapOptions);
+
+        const roadviewContainer = document.getElementById('roadview');
+        roadview = new kakao.maps.Roadview(roadviewContainer);
+        roadviewClient = new kakao.maps.RoadviewClient();
+
+        ps = new kakao.maps.services.Places();
+
+        // 지도 렌더링 회색 깨짐 방지 처리 (지연 relayout)
+        setTimeout(function() {
+            map.relayout();
+            map.setCenter(defaultPosition);
+            searchCurrentCategory();
+        }, 300);
+
+        // 창 크기 변경 시 지도 재정렬
+        window.addEventListener('resize', function() {
+            map.relayout();
+        });
+    }
+
+    function switchTab(category) {
+        if (activeCategory === category) return;
+        activeCategory = category;
+
+        document.getElementById('btn-photo').classList.toggle('active', category === 'photo');
+        document.getElementById('btn-passport').classList.toggle('active', category === 'passport');
+
+        searchCurrentCategory();
+    }
+
+    function clearPreviousResults() {
+        currentOverlayList.forEach(overlay => overlay.setMap(null));
+        currentOverlayList = [];
+
+        if (currentInfowindow) {
+            currentInfowindow.close();
+        }
+
+        document.getElementById('place-list').innerHTML = '';
+        accumulatedPlaces = [];
+    }
+
+    // 전국에 균일하게 마커가 표시되도록 지역별 병렬 검색 수행
+    function searchCurrentCategory() {
+        clearPreviousResults();
+        map.relayout();
+
+        const config = TAB_CONFIG[activeCategory];
+        let completedCount = 0;
+
+        REGION_CENTERS.forEach(region => {
+            const query = `${region} ${config.keyword}`;
+            
+            ps.keywordSearch(query, function(data, status) {
+                completedCount++;
+                if (status === kakao.maps.services.Status.OK) {
+                    // 중복 장소 제거 후 합치기
+                    data.forEach(place => {
+                        if (!accumulatedPlaces.some(p => p.id === place.id)) {
+                            accumulatedPlaces.push(place);
+                        }
+                    });
+                }
+
+                // 모든 지역 거점 검색 완료 시 일괄 표시
+                if (completedCount === REGION_CENTERS.length) {
+                    displayPlaces(accumulatedPlaces);
+                }
+            });
+        });
+    }
+
+    function displayPlaces(places) {
+        const listElement = document.getElementById('place-list');
+        listElement.innerHTML = '';
+
+        if (places.length === 0) {
+            listElement.innerHTML = '<li style="text-align:center; padding:20px; color:#888;">검색 결과가 없습니다.</li>';
+            return;
+        }
+
+        const currentEmoji = TAB_CONFIG[activeCategory].emoji;
+
+        places.forEach((place) => {
+            const placePosition = new kakao.maps.LatLng(place.y, place.x);
+
+            // 1. 커스텀 마커 생성
+            const markerElement = document.createElement('div');
+            markerElement.className = 'emoji-marker';
+            markerElement.innerHTML = currentEmoji;
+
+            const customOverlay = new kakao.maps.CustomOverlay({
+                position: placePosition,
+                content: markerElement,
+                yAnchor: 1
+            });
+
+            customOverlay.setMap(map);
+            currentOverlayList.push(customOverlay);
+
+            // 2. 팝업 인포윈도우
+            const phoneText = place.phone ? place.phone : '전화번호 없음';
+            const addressText = place.road_address_name ? place.road_address_name : place.address_name;
+
+            const popupContent = `
+                <div class="info-popup">
+                    <strong>${place.place_name}</strong>
+                    <div>${addressText}</div>
+                    <div style="color: #666; margin-top:2px;">📞 ${phoneText}</div>
+                </div>
+            `;
+
+            const infowindow = new kakao.maps.InfoWindow({
+                content: popupContent,
+                removable: true
+            });
+
+            markerElement.addEventListener('click', function() {
+                selectPlace(placePosition, infowindow, customOverlay);
+            });
+
+            // 3. 왼쪽 사이드바 리스트
+            const listItem = document.createElement('li');
+            listItem.innerHTML = `
+                <div class="place-title">${currentEmoji} ${place.place_name}</div>
+                <div class="place-address">${addressText}</div>
+                <div class="place-phone">${phoneText}</div>
+            `;
+
+            listItem.addEventListener('click', function() {
+                map.setCenter(placePosition);
+                map.setLevel(4); // 클릭 시 장소 확대
+                selectPlace(placePosition, infowindow, customOverlay);
+            });
+
+            listElement.appendChild(listItem);
+        });
+    }
+
+    function selectPlace(position, infowindow, overlay) {
+        if (currentInfowindow) {
+            currentInfowindow.close();
+        }
+
+        infowindow.open(map, overlay);
+        currentInfowindow = infowindow;
+
+        updateRoadview(position);
+    }
+
+    function updateRoadview(position) {
+        const noDataOverlay = document.getElementById('roadview-no-data');
+
+        roadviewClient.getNearestPanoId(position, 50, function(panoId) {
+            if (panoId === null) {
+                noDataOverlay.innerText = '선택한 장소 근처에 거리뷰가 없습니다.';
+                noDataOverlay.style.display = 'flex';
+            } else {
+                noDataOverlay.style.display = 'none';
+                roadview.setPanoId(panoId, position);
+            }
+        });
+    }
+</script>
+
+</body>
+</html>
