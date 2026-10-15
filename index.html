@@ -23,10 +23,11 @@
             width: 100vw;
             height: 100vh;
         }
-        /* 왼쪽 사이드바 (탭 & 목록) */
+        
+        /* 왼쪽 사이드바 (340px 고정) */
         #sidebar {
             width: 340px;
-            height: 100%;
+            height: 100vh;
             border-right: 1px solid #ddd;
             display: flex;
             flex-direction: column;
@@ -86,14 +87,13 @@
             margin-top: 4px;
         }
         
-        /* 오른쪽 영역 (지도 전체) */
+        /* 오른쪽 메인 지도가 화면 높이 100% 전체를 사용 */
         #map {
-            flex: 1;
-            height: 100%;
-            width: 100%;
+            width: calc(100vw - 340px);
+            height: 100vh;
         }
 
-        /* 이모티콘 마커 스타일 */
+        /* 이모티콘 마커 CSS */
         .emoji-marker {
             font-size: 20px;
             background: #ffffff;
@@ -106,25 +106,67 @@
             justify-content: center;
             box-shadow: 0 2px 6px rgba(0,0,0,0.3);
             cursor: pointer;
-            transition: transform 0.15s ease-in-out;
+            transition: transform 0.15s;
         }
         .emoji-marker:hover {
             transform: scale(1.2);
-            z-index: 99;
         }
 
-        /* 인포윈도우 팝업 스타일 */
-        .info-popup {
-            padding: 10px;
-            font-size: 12px;
-            line-height: 1.4;
-            min-width: 180px;
+        /* 커스텀 팝업 오버레이 CSS (마커 바로 위에 뜨도록 위치 고정) */
+        .custom-popup {
+            position: absolute;
+            bottom: 48px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #ffffff;
+            border: 1px solid #999;
+            border-radius: 8px;
+            padding: 12px 14px;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.25);
+            min-width: 200px;
+            z-index: 999;
+            white-space: nowrap;
         }
-        .info-popup strong {
-            font-size: 14px;
+        /* 팝업 하단 말풍선 화살표 */
+        .custom-popup::after {
+            content: '';
+            position: absolute;
+            bottom: -8px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 8px 8px 0;
+            border-style: solid;
+            border-color: #ffffff transparent;
             display: block;
+            width: 0;
+        }
+        .popup-title {
+            font-weight: bold;
+            font-size: 14px;
+            color: #111;
             margin-bottom: 4px;
+            padding-right: 15px;
+        }
+        .popup-close {
+            position: absolute;
+            top: 6px;
+            right: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #888;
+            font-weight: bold;
+        }
+        .popup-close:hover {
             color: #000;
+        }
+        .popup-address {
+            font-size: 12px;
+            color: #555;
+            margin-bottom: 3px;
+        }
+        .popup-phone {
+            font-size: 12px;
+            color: #0066cc;
         }
     </style>
 </head>
@@ -140,27 +182,26 @@
         <ul id="place-list"></ul>
     </div>
 
-    <!-- 메인 지도 (화면 전체 차지) -->
+    <!-- 메인 지도 (100% 풀사이즈) -->
     <div id="map"></div>
 </div>
 
 <script>
-    // 글로벌 변수 선언
+    // 글로벌 변수
     let map;
     let ps;
-    let currentInfowindow = null; // 현재 지도에 열려있는 단 하나의 인포윈도우 객체
-    
     let activeCategory = 'photo';
-    let currentOverlayList = [];  // 지도 상의 오버레이 마커 리스트
-    let accumulatedPlaces = [];   // 수집된 전체 장소 데이터 리스트
+    
+    let currentOverlayList = []; // 지도 상의 마커 리스트
+    let currentPopupOverlay = null; // 현재 지도에 열려 있는 단 하나의 팝업 오버레이
+    let accumulatedPlaces = []; // 검색된 장소 목록
 
-    // 탭별 키워드 및 이모티콘 설정
     const TAB_CONFIG = {
         photo: { keyword: '증명사진', emoji: '📸' },
         passport: { keyword: '여권민원실', emoji: '🧑‍💼' }
     };
 
-    // 전국 균일 검색을 위한 광역 거점 리스트
+    // 전국에 마커가 균일하게 뜨도록 주요 지점 다중 검색
     const REGION_CENTERS = [
         "서울", "경기 수원", "경기 고양", "인천", "강원 춘천", 
         "대전", "충북 청주", "충남 천안", "전북 전주", "광주", 
@@ -171,10 +212,9 @@
         initMap();
     };
 
-    // 지도 초기화 함수
     function initMap() {
         const mapContainer = document.getElementById('map');
-        const defaultPosition = new kakao.maps.LatLng(36.5, 127.5); // 대한민국 중심 좌표
+        const defaultPosition = new kakao.maps.LatLng(36.5, 127.5); // 대한민국 중심
 
         const mapOptions = {
             center: defaultPosition,
@@ -184,26 +224,18 @@
         map = new kakao.maps.Map(mapContainer, mapOptions);
         ps = new kakao.maps.services.Places();
 
-        // 팝업 생성을 위한 단일 InfoWindow 객체 생성
-        currentInfowindow = new kakao.maps.InfoWindow({
-            zIndex: 1,
-            removable: true
-        });
-
-        // 지도가 완전 렌더링된 뒤 검색 실행 (회색 깨짐 완벽 방지)
+        // 지도가 완전 렌더링되도록 처리
         setTimeout(function() {
             map.relayout();
             map.setCenter(defaultPosition);
             searchCurrentCategory();
-        }, 200);
+        }, 150);
 
-        // 창 크기가 달라질 때 지도 비율 자동 재설정
         window.addEventListener('resize', function() {
             map.relayout();
         });
     }
 
-    // 탭 전환 함수
     function switchTab(category) {
         if (activeCategory === category) return;
         activeCategory = category;
@@ -214,22 +246,18 @@
         searchCurrentCategory();
     }
 
-    // 기존 마커, 리스트, 팝업 지우기
     function clearPreviousResults() {
-        // 기존 오버레이 마커 제거
+        // 기존 마커 전체 지우기
         currentOverlayList.forEach(overlay => overlay.setMap(null));
         currentOverlayList = [];
 
-        // 인포윈도우 팝업 닫기
-        if (currentInfowindow) {
-            currentInfowindow.close();
-        }
+        // 열려있는 팝업 지우기
+        closePopup();
 
         document.getElementById('place-list').innerHTML = '';
         accumulatedPlaces = [];
     }
 
-    // 카테고리 검색 수행
     function searchCurrentCategory() {
         clearPreviousResults();
 
@@ -243,14 +271,12 @@
                 completedCount++;
                 if (status === kakao.maps.services.Status.OK) {
                     data.forEach(place => {
-                        // 중복 장소 제거
                         if (!accumulatedPlaces.some(p => p.id === place.id)) {
                             accumulatedPlaces.push(place);
                         }
                     });
                 }
 
-                // 모든 지역 검색 완료 시 화면에 노출
                 if (completedCount === REGION_CENTERS.length) {
                     displayPlaces(accumulatedPlaces);
                 }
@@ -258,7 +284,6 @@
         });
     }
 
-    // 장소 목록 및 마커 표시
     function displayPlaces(places) {
         const listElement = document.getElementById('place-list');
         listElement.innerHTML = '';
@@ -273,7 +298,7 @@
         places.forEach((place) => {
             const placePosition = new kakao.maps.LatLng(place.y, place.x);
 
-            // 1. 커스텀 오버레이 마커 생성
+            // 1. 이모티콘 마커 오버레이 생성
             const markerElement = document.createElement('div');
             markerElement.className = 'emoji-marker';
             markerElement.innerHTML = currentEmoji;
@@ -281,18 +306,19 @@
             const customOverlay = new kakao.maps.CustomOverlay({
                 position: placePosition,
                 content: markerElement,
-                yAnchor: 1.1
+                yAnchor: 1.0
             });
 
             customOverlay.setMap(map);
             currentOverlayList.push(customOverlay);
 
-            // 마커 클릭 시 해당 좌표 위치에서만 팝업 표시 (이전 팝업 자동 제거)
-            markerElement.addEventListener('click', function() {
+            // 마커 클릭 시 해당 마커 바로 위에 팝업 띄우기
+            markerElement.addEventListener('click', function(e) {
+                e.stopPropagation();
                 openPopup(placePosition, place);
             });
 
-            // 2. 왼쪽 사이드바 리스트 아이템 생성
+            // 2. 왼쪽 리스트 생성
             const phoneText = place.phone ? place.phone : '전화번호 없음';
             const addressText = place.road_address_name ? place.road_address_name : place.address_name;
 
@@ -303,7 +329,7 @@
                 <div class="place-phone">${phoneText}</div>
             `;
 
-            // 목록 클릭 시 지도 중심 이동 및 확대 후 해당 마커 위에 팝업 오픈
+            // 목록 클릭 시 지도 중심 이동 & 해당 마커에 팝업 표출
             listItem.addEventListener('click', function() {
                 map.setCenter(placePosition);
                 map.setLevel(4);
@@ -314,26 +340,41 @@
         });
     }
 
-    // 마커 좌표 위치에 단일 팝업을 띄우는 전용 함수
+    // 마커 클릭 시 정확한 좌표 위에 팝업 띄우기
     function openPopup(position, place) {
-        // 기존 팝업 닫기
-        currentInfowindow.close();
+        // 기존 팝업이 있다면 무조건 먼저 제거
+        closePopup();
 
         const phoneText = place.phone ? place.phone : '전화번호 없음';
         const addressText = place.road_address_name ? place.road_address_name : place.address_name;
 
-        const popupContent = `
-            <div class="info-popup">
-                <strong>${place.place_name}</strong>
-                <div>${addressText}</div>
-                <div style="color: #666; margin-top:2px;">📞 ${phoneText}</div>
-            </div>
+        // 팝업 HTML 요소 직접 생성
+        const popupContent = document.createElement('div');
+        popupContent.className = 'custom-popup';
+        popupContent.innerHTML = `
+            <span class="popup-close" onclick="closePopup()">✕</span>
+            <div class="popup-title">${place.place_name}</div>
+            <div class="popup-address">${addressText}</div>
+            <div class="popup-phone">📞 ${phoneText}</div>
         `;
 
-        // 해당 좌표로 팝업 위치 및 내용 재설정 후 열기
-        currentInfowindow.setContent(popupContent);
-        currentInfowindow.setPosition(position);
-        currentInfowindow.open(map);
+        // 팝업을 해당 마커 좌표(position) 위치에 오버레이로 생성
+        currentPopupOverlay = new kakao.maps.CustomOverlay({
+            position: position,
+            content: popupContent,
+            yAnchor: 1.0,
+            zIndex: 999
+        });
+
+        currentPopupOverlay.setMap(map);
+    }
+
+    // 열려 있는 팝업 닫기
+    function closePopup() {
+        if (currentPopupOverlay) {
+            currentPopupOverlay.setMap(null);
+            currentPopupOverlay = null;
+        }
     }
 </script>
 
